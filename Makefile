@@ -7,11 +7,11 @@ SHELL := /usr/bin/env bash
 
 CONTROLLER_TOOLS_VERSION := v0.21.0
 GOLANGCI_LINT_VERSION    := v2.14.0
-ENVTEST_K8S_VERSION      := 1.31.0
+ENVTEST_K8S_VERSION      := 1.37.0
 
 CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
 GOLANGCI_LINT  := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-SETUP_ENVTEST  := go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.19
+SETUP_ENVTEST  := go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.25
 
 # The KubeVM commit the vendored VirtualMachine CRD comes from. Keep in step
 # with the pseudo-version in go.mod.

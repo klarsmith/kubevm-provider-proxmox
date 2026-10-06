@@ -11,6 +11,12 @@ renames that heading to the version and date (see
 
 ## [Unreleased]
 
+### Changed
+
+- Built on controller-runtime v0.25 and k8s.io v0.37 (KubeVM itself pins
+  v0.19 / v0.31; its core controller builds and passes envtest on the newer
+  versions). Go 1.26 or newer is required.
+
 ### Added
 
 - `ProxmoxMachine` (`infrastructure.kube-vm.io/v1alpha1`): backs a KubeVM

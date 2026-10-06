@@ -468,7 +468,8 @@ kept.
 `luthermonson/go-proxmox` (checked at `d78ab04`, 2026-09-30) covers every
 endpoint needed. It wasn't used because:
 
-- it requires Go 1.25, while the KubeVM modules pin 1.23;
+- it required Go 1.25 at the time, while the KubeVM modules pinned 1.23
+  (since moot: this module now needs 1.26 for k8s.io 0.37);
 - it addresses VMs through objects fetched per node, which costs extra calls
   and assumes a stable node;
 - a much larger surface would sit behind the fake.

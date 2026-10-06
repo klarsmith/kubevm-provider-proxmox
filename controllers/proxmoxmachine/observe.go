@@ -137,7 +137,7 @@ func (r *Reconciler) pollPendingTask(ctx context.Context, m *pxv1a1.ProxmoxMachi
 		if op != pxv1a1.OpClone {
 			m.Status.PendingOp = ""
 		}
-		return false, ctrl.Result{Requeue: true}, nil
+		return false, ctrl.Result{RequeueAfter: requeueSoon}, nil
 	}
 	if err != nil {
 		return false, ctrl.Result{}, fmt.Errorf("polling %s task: %w", op, err)

@@ -288,7 +288,3 @@ type ProxmoxMachineList struct {
 
 	Items []ProxmoxMachine `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&ProxmoxMachine{}, &ProxmoxMachineList{})
-}

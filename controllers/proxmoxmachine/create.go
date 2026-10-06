@@ -206,7 +206,7 @@ func (r *Reconciler) resumeClone(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 			// would never clear.
 			releaseReservation(m, fmt.Sprintf("VMID %d is taken by a container; picking a new one",
 				m.Status.VMID))
-			return ctrl.Result{Requeue: true}, false, nil
+			return ctrl.Result{RequeueAfter: requeueSoon}, false, nil
 		}
 		// Not sent yet, or not visible yet (a VM mid-clone is in no pool,
 		// so a pool-scoped token may not see it): (re)send. A duplicate send
@@ -235,7 +235,7 @@ func (r *Reconciler) resumeClone(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 		// Another client took the reserved ID before our clone landed.
 		releaseReservation(m, fmt.Sprintf(
 			"VMID %d was taken by another VM before the clone landed; picking a new one", vm.VMID))
-		return ctrl.Result{Requeue: true}, false, nil
+		return ctrl.Result{RequeueAfter: requeueSoon}, false, nil
 	}
 	m.Status.PendingOp = ""
 	return ctrl.Result{}, true, nil

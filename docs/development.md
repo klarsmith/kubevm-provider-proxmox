@@ -31,8 +31,8 @@ make install    # apply both CRDs to the current kubectl context
 make run        # run the manager against the current kubectl context
 ```
 
-The module builds with Go 1.23 (go.mod). The pinned tools (controller-gen,
-golangci-lint) need a current Go.
+The module needs Go 1.26 or newer (go.mod), set by k8s.io 0.37 and
+controller-runtime 0.25. CI also builds with the newest stable Go.
 
 ## Tests
 

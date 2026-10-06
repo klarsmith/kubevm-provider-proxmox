@@ -42,6 +42,11 @@ const (
 	// trying again.
 	failureRequeueDelay = time.Minute
 
+	// requeueSoon is for "state changed under us, look again now": a
+	// dropped reservation, a vanished task. Short, but not zero, so a
+	// persistent condition cannot spin the worker.
+	requeueSoon = time.Second
+
 	// resyncPeriod re-observes a settled VM. Proxmox VMs change out-of-band
 	// (HA migration, someone in the web UI), and nothing notifies us.
 	resyncPeriod = 2 * time.Minute

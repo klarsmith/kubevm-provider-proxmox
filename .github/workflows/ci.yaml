@@ -15,8 +15,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           # Not go.mod's version: go.mod states the oldest Go the module
-          # builds with (1.23), but the pinned tools (controller-gen v0.21,
-          # golangci-lint v2.14) need a current toolchain.
+          # builds with; the tools and the release image use the newest.
           go-version: stable
       - run: go vet ./...
       - run: make verify

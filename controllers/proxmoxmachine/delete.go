@@ -110,7 +110,7 @@ func (r *Reconciler) destroy(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 	// Live state, not the listing's cached one: acting on the cache sent
 	// the same hard stop four times on a real PVE.
 	if err := r.refreshLiveStatus(ctx, px, vm); errors.Is(err, proxmox.ErrNotFound) {
-		return ctrl.Result{Requeue: true}, false, nil // gone; the next pass sweeps
+		return ctrl.Result{RequeueAfter: requeueSoon}, false, nil // gone; the next pass sweeps
 	} else if err != nil {
 		return ctrl.Result{}, false, err
 	}
