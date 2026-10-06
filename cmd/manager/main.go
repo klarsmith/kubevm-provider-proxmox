@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -65,9 +67,15 @@ func run() error {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: probeAddr,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
-		LeaderElection:         leaderElect,
-		LeaderElectionID:       "kubevm-provider-proxmox.infrastructure.kube-vm.io",
+		// Credentials Secrets are read directly, not through the cache. A
+		// cached read would start a cluster-wide Secret informer, which
+		// needs list/watch on all Secrets; the RBAC grants only get. With
+		// the cache, the first Get blocks forever on an informer that can
+		// never sync.
+		Client:           client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}}},
+		Metrics:          metricsserver.Options{BindAddress: metricsAddr},
+		LeaderElection:   leaderElect,
+		LeaderElectionID: "kubevm-provider-proxmox.infrastructure.kube-vm.io",
 	})
 	if err != nil {
 		return fmt.Errorf("building the manager: %w", err)

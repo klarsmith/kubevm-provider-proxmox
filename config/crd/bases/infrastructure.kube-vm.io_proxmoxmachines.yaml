@@ -241,6 +241,14 @@ spec:
                   type: object
                 type: array
                 x-kubernetes-list-type: atomic
+              cloneRefusals:
+                description: |-
+                  CloneRefusals counts consecutive clone attempts refused with "already
+                  exists" while nothing visible holds the reserved VMID and no clone is
+                  running. After a few, the holder is taken to be a VM this token cannot
+                  see, and a new VMID is reserved.
+                format: int32
+                type: integer
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -349,8 +357,9 @@ spec:
                   cloud-init, network, disk resize) has been applied.
                 type: boolean
               vmid:
-                description: VMID of the Proxmox VM, recorded as soon as the clone
-                  call returns.
+                description: |-
+                  VMID of the Proxmox VM, reserved and written before the clone is
+                  sent, so a retry can never clone into a second ID.
                 type: integer
             type: object
         type: object

@@ -159,8 +159,10 @@ func (r *Reconciler) create(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 	upid, err := px.Clone(ctx, tmpl.Node, tmpl.VMID, opts)
 	if proxmox.IsAlreadyExists(err) {
 		// Either our own earlier clone into this ID (its UPID was never
-		// recorded) or another client's VM. resumeClone tells them apart
-		// once the VM is visible.
+		// recorded) or another client's VM. resumeClone tells them apart:
+		// by lock and marker once the VM is visible, by the clone task
+		// while it runs, and by this counter when neither ever shows up.
+		m.Status.CloneRefusals++
 		setCondition(m, notReady(pxv1a1.ReasonProvisioning,
 			fmt.Sprintf("VM %d already exists but is not visible yet; waiting for it to show up as this machine's clone", newID)))
 		return ctrl.Result{RequeueAfter: r.pollDelay()}, nil
@@ -169,6 +171,7 @@ func (r *Reconciler) create(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 		return ctrl.Result{}, fmt.Errorf("cloning template %q (%d): %w", tmpl.Name, tmpl.VMID, err)
 	}
 
+	m.Status.CloneRefusals = 0
 	m.Status.PendingTask, m.Status.PendingOp = upid, pxv1a1.OpClone
 	m.Status.ProviderMetadata = map[string]string{"template": m.Spec.Template, "vmid": fmt.Sprint(newID)}
 	setCondition(m, notReady(pxv1a1.ReasonProvisioning,
@@ -178,8 +181,14 @@ func (r *Reconciler) create(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 
 // releaseReservation gives up a reserved VMID that turned out to belong to
 // someone else.
+// cloneRefusalLimit is how many consecutive "already exists" refusals, with
+// no clone running and nothing visible at the ID, give up a reservation.
+// Each refusal is a poll interval apart, so this is well beyond the few
+// seconds the resource listing can lag.
+const cloneRefusalLimit = 3
+
 func releaseReservation(m *pxv1a1.ProxmoxMachine, msg string) {
-	m.Status.VMID, m.Status.PendingOp, m.Status.PendingTask = 0, "", ""
+	m.Status.VMID, m.Status.PendingOp, m.Status.PendingTask, m.Status.CloneRefusals = 0, "", "", 0
 	setCondition(m, notReady(pxv1a1.ReasonProvisioning, msg))
 }
 
@@ -208,13 +217,30 @@ func (r *Reconciler) resumeClone(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 				m.Status.VMID))
 			return ctrl.Result{RequeueAfter: requeueSoon}, false, nil
 		}
-		// Not sent yet, or not visible yet (a VM mid-clone is in no pool,
-		// so a pool-scoped token may not see it): (re)send. A duplicate send
-		// fails with "already exists" and is harmless. If the ID belongs to
-		// a VM this token can never see, this waits and says so in the
-		// condition; the reservation is never dropped on a timer, because
-		// a slow clone looks exactly the same and dropping it would clone
-		// twice.
+		// Our own clone in flight is invisible in the listing (a VM
+		// mid-clone is in no pool), but its task is not: it runs under the
+		// template's VMID and we started it.
+		inFlight, err := r.cloneInFlight(ctx, m, px, vms)
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if inFlight {
+			setCondition(m, notReady(pxv1a1.ReasonTaskRunning,
+				fmt.Sprintf("clone into VM %d is in progress", m.Status.VMID)))
+			return ctrl.Result{RequeueAfter: r.pollDelay()}, false, nil
+		}
+		if m.Status.CloneRefusals >= cloneRefusalLimit {
+			// Several "already exists" with no clone running and nothing
+			// visible at the ID: the holder is a VM this token cannot see
+			// (another pool). Were it our own finished clone, it would be
+			// in our pool and listed by now; if the listing is merely slow,
+			// the marker lookup on the next pass adopts it anyway.
+			releaseReservation(m, fmt.Sprintf(
+				"VMID %d is held by a VM this token cannot see; picking a new one", m.Status.VMID))
+			return ctrl.Result{RequeueAfter: requeueSoon}, false, nil
+		}
+		// Not sent yet, or finished but not listed yet: (re)send. A
+		// duplicate send fails with "already exists" and is harmless.
 		res, err := r.create(ctx, m, px, vms, sw)
 		return res, false, err
 	}
@@ -237,6 +263,6 @@ func (r *Reconciler) resumeClone(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 			"VMID %d was taken by another VM before the clone landed; picking a new one", vm.VMID))
 		return ctrl.Result{RequeueAfter: requeueSoon}, false, nil
 	}
-	m.Status.PendingOp = ""
+	m.Status.PendingOp, m.Status.CloneRefusals = "", 0
 	return ctrl.Result{}, true, nil
 }

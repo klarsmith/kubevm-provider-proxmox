@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/klarsmith/kubevm-provider-proxmox/internal/proxmox"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -70,6 +71,14 @@ type Fake struct {
 	// status until removed (FailTask fails only the next one).
 	AlwaysFailTask map[string]string
 
+	// HiddenVMIDs are IDs taken by VMs the token cannot see: absent from
+	// Resources, but a clone into them is refused with "already exists".
+	HiddenVMIDs map[int]bool
+
+	// ListedNode overrides the node Resources reports for a VMID (the
+	// listing lagging behind a migration). Calls still go to the real node.
+	ListedNode map[int]string
+
 	// Err makes the named method ("Resources", "Clone", ...) fail.
 	Err map[string]error
 }
@@ -80,6 +89,10 @@ type FakeVM struct {
 	Config     map[string]string
 	Interfaces []proxmox.Interface
 }
+
+// base64Charset is the loose key-material check the fake applies: real PVE
+// parses the key fully, the fake only refuses obvious garbage.
+var base64Charset = regexp.MustCompile(`^[A-Za-z0-9+/=]+$`)
 
 // fakeTask runs for a number of time steps (see step), then lands its effect.
 type fakeTask struct {
@@ -106,6 +119,8 @@ func New() *Fake {
 		FailTask:       map[string]string{},
 		ListedStatus:   map[int]string{},
 		AlwaysFailTask: map[string]string{},
+		HiddenVMIDs:    map[int]bool{},
+		ListedNode:     map[int]string{},
 		Err:            map[string]error{},
 	}
 	f.AddVM(FakeVM{
@@ -151,6 +166,29 @@ func (f *Fake) Remove(vmid int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.VMs, vmid)
+}
+
+// MoveVM relocates a VM to another node, as a migration does.
+func (f *Fake) MoveVM(vmid int, node string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if vm, ok := f.VMs[vmid]; ok {
+		vm.Node = node
+	}
+}
+
+// FinishTask ends a task started with AddTask (or any task) on the next
+// poll, with the given exit status ("OK" for success).
+func (f *Fake) FinishTask(upid, exit string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.tasks[upid]; ok {
+		t.polls = 0
+		t.exit = exit
+		if exit != "OK" {
+			t.effect = nil
+		}
+	}
 }
 
 // SetStatus changes a VM's power state out-of-band.
@@ -237,6 +275,9 @@ func (f *Fake) Resources(context.Context) ([]proxmox.VM, error) {
 		if st, ok := f.ListedStatus[vm.VMID]; ok {
 			listed.Status = st
 		}
+		if node, ok := f.ListedNode[vm.VMID]; ok {
+			listed.Node = node
+		}
 		out = append(out, listed)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].VMID < out[j].VMID })
@@ -265,7 +306,8 @@ func (f *Fake) NextID(context.Context) (int, error) {
 		return 0, err
 	}
 	for {
-		if _, taken := f.VMs[f.nextID]; !taken {
+		// Like PVE, skips every existing guest, visible to the token or not.
+		if _, taken := f.VMs[f.nextID]; !taken && !f.HiddenVMIDs[f.nextID] {
 			return f.nextID, nil
 		}
 		f.nextID++
@@ -301,6 +343,22 @@ func (f *Fake) SetConfig(_ context.Context, node string, vmid int, params url.Va
 	if err != nil {
 		return err
 	}
+	if enc := params.Get("sshkeys"); enc != "" {
+		// PVE parses every key; one it cannot decode fails the whole call.
+		dec, err := url.QueryUnescape(enc)
+		if err != nil {
+			return fmt.Errorf("%w: SSH public key validation error", proxmox.ErrInvalidParameter)
+		}
+		for _, line := range strings.Split(dec, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 || !strings.HasPrefix(fields[0], "ssh-") {
+				return fmt.Errorf("%w: SSH public key validation error", proxmox.ErrInvalidParameter)
+			}
+			if !base64Charset.MatchString(fields[1]) {
+				return fmt.Errorf("%w: SSH public key validation error", proxmox.ErrInvalidParameter)
+			}
+		}
+	}
 	keys := make([]string, 0, len(params))
 	for k := range params {
 		keys = append(keys, k)
@@ -330,7 +388,7 @@ func (f *Fake) Clone(_ context.Context, node string, templateID int, o proxmox.C
 			Config: map[string]string{"name": "someone-else"},
 		}
 	}
-	if _, taken := f.VMs[o.NewID]; taken {
+	if _, taken := f.VMs[o.NewID]; taken || f.HiddenVMIDs[o.NewID] {
 		return "", fmt.Errorf("unable to create VM %d: config file already exists", o.NewID)
 	}
 	target := node

@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	kubevmv1a1 "github.com/vmware-tanzu/vm-operator/external/kubevm/api/v1alpha1"
@@ -39,8 +40,14 @@ func TestStatusWriterDoesNotOverwriteNewerStatus(t *testing.T) {
 	sw := e.r.newStatusWriter(stale)
 	stale.Status.VMID = 101
 	stale.Status.PendingOp = pxv1a1.OpClone
-	if err := sw.flush(ctx, stale); !apierrors.IsConflict(err) {
-		t.Fatalf("flush err = %v, want a conflict", err)
+	err := sw.flush(ctx, stale)
+	if err == nil {
+		t.Fatal("flush succeeded against a newer status")
+	}
+	if apierrors.IsConflict(err) {
+		// RetryOnConflict would keep retrying a Conflict; the stale case
+		// must come back as an ordinary error after one attempt.
+		t.Fatalf("flush err is still a Conflict: %v", err)
 	}
 	if got := e.get().Status; got.VMID != 100 || got.PendingTask == "" {
 		t.Errorf("newer status overwritten: %+v", got)
@@ -218,4 +225,159 @@ func TestDeleteIgnoresStartBackoff(t *testing.T) {
 
 func reqFor() ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}
+}
+
+// A paused VM (I/O error, or paused by a user) still has a QEMU process;
+// destroy must stop it first, as for a running one.
+func TestDeleteStopsAPausedVM(t *testing.T) {
+	e := newEnv(t)
+	e.until("running", 20, isRunningWithAddress)
+	e.px.SetStatus(firstID, "paused")
+	e.deleteMachine()
+	e.until("deleted", 20, func(m *pxv1a1.ProxmoxMachine) bool { return m == nil })
+	if got := e.px.CallsWithPrefix("stop"); len(got) != 1 {
+		t.Errorf("stop calls = %v, want exactly one before destroy", got)
+	}
+	if _, ok := e.px.Get(firstID); ok {
+		t.Error("VM still exists")
+	}
+}
+
+// The reserved VMID is held by a VM this token cannot see: every clone is
+// refused, nothing is listed at the ID, and no clone task runs. After a few
+// refusals the reservation moves on instead of waiting forever.
+func TestInvisibleHolderOfReservedIDIsGivenUp(t *testing.T) {
+	e := newEnv(t)
+	e.px.HiddenVMIDs[firstID] = true // exists on PVE, invisible to the token
+	m := e.until("running", 30, isRunningWithAddress)
+	if m.Status.VMID != firstID+1 {
+		t.Errorf("vmid = %d, want %d after giving up %d", m.Status.VMID, firstID+1, firstID)
+	}
+	if n := len(e.px.CallsWithPrefix("clone")); n != 1 {
+		t.Errorf("%d successful clones, want 1", n)
+	}
+}
+
+// A slow listing must not be mistaken for an invisible holder: while our
+// own clone task runs, the reservation is kept however many polls it takes.
+func TestSlowCloneIsNotGivenUp(t *testing.T) {
+	e := newEnv(t)
+	e.px.TaskPolls = 8 // longer than cloneRefusalLimit polls
+	lost := false
+	e.failStatusPatch = func(m *pxv1a1.ProxmoxMachine) error {
+		if !lost && m.Status.PendingOp == pxv1a1.OpClone && m.Status.PendingTask != "" {
+			lost = true
+			return apierrors.NewServiceUnavailable("etcdserver: request timed out")
+		}
+		return nil
+	}
+	m := e.until("running", 40, isRunningWithAddress)
+	if !lost {
+		t.Fatal("the clone's status write was not intercepted")
+	}
+	if n := len(e.px.CallsWithPrefix("clone")); n != 1 || m.Status.VMID != firstID {
+		t.Errorf("%d clones, vmid %d; want 1 clone into %d", n, m.Status.VMID, firstID)
+	}
+}
+
+// Editing cloud-init fields or the hostname after first boot reaches the
+// VM config (for the next boot) and is reported, not silently dropped.
+func TestCloudInitDriftIsApplied(t *testing.T) {
+	e := newEnv(t)
+	e.until("running", 20, isRunningWithAddress)
+	e.setParent(func(vm *kubevmv1a1.VirtualMachine) {
+		vm.Spec.SSHPublicKeys = []string{"ssh-ed25519 NEWKEY user@example"}
+		vm.Spec.Network = &kubevmv1a1.NetworkSpec{HostName: ptr.To("renamed-01")}
+	})
+	m := e.until("drift applied", 10, func(m *pxv1a1.ProxmoxMachine) bool {
+		vm, _ := e.px.Get(firstID)
+		return strings.Contains(vm.Config["sshkeys"], "NEWKEY") && vm.Config["name"] == "renamed-01"
+	})
+	if c := cond(m, pxv1a1.ConditionUpToDate); !strings.Contains(c.Message, "next boot") {
+		t.Errorf("UpToDate message = %q, want a next-boot note while running", c.Message)
+	}
+}
+
+// A migration someone else started is waited for, but its failure is not
+// recorded against this machine.
+func TestForeignTaskFailureIsNotOurs(t *testing.T) {
+	e := newEnv(t)
+	e.until("running", 20, isRunningWithAddress)
+	upid := e.px.AddTask("pve", firstID, "qmigrate")
+	for i := 0; i < 3; i++ {
+		_, _ = e.reconcile()
+	}
+	if m := e.get(); m.Status.PendingTask != upid {
+		t.Fatalf("migration not adopted: pendingTask = %q", m.Status.PendingTask)
+	}
+	e.px.FinishTask(upid, "migration aborted")
+	for i := 0; i < 3; i++ {
+		_, _ = e.reconcile()
+	}
+	m := e.get()
+	if m.Status.ConsecutiveFailures != 0 || m.Status.NextAttempt != nil {
+		t.Errorf("foreign failure recorded as ours: %+v", m.Status)
+	}
+	if c := cond(m, pxv1a1.ConditionInfrastructureReady); c.Status != metav1.ConditionTrue {
+		t.Errorf("InfrastructureReady = %s %s after a foreign task", c.Status, c.Reason)
+	}
+}
+
+// Between the listing and the live-status read the VM migrated: its old
+// node answers "not found". That is not VMGone.
+func TestMigratedVMIsNotReportedGone(t *testing.T) {
+	e := newEnv(t)
+	e.until("running", 20, isRunningWithAddress)
+	e.px.ListedNode[firstID] = "pve" // listing still says the old node
+	e.px.MoveVM(firstID, "pve2")     // but the VM now lives on pve2
+	for i := 0; i < 3; i++ {
+		_, _ = e.reconcile()
+		if c := cond(e.get(), pxv1a1.ConditionInfrastructureReady); c != nil && c.Reason == pxv1a1.ReasonVMGone {
+			t.Fatal("migrating VM reported as VMGone")
+		}
+	}
+	delete(e.px.ListedNode, firstID) // listing caught up
+	m := e.until("running on pve2", 5, isRunningWithAddress)
+	if m.Status.ProviderMetadata["node"] != "pve2" {
+		t.Errorf("node = %q, want pve2", m.Status.ProviderMetadata["node"])
+	}
+}
+
+// A key Proxmox cannot parse is a configuration error, reported on
+// UpToDate as InvalidConfiguration and not retried as an API failure.
+func TestRejectedSSHKeyIsInvalidConfiguration(t *testing.T) {
+	e := newEnv(t)
+	e.until("running", 20, isRunningWithAddress)
+	e.setParent(func(vm *kubevmv1a1.VirtualMachine) {
+		vm.Spec.SSHPublicKeys = []string{"ssh-ed25519 not-base64!! user@example"}
+	})
+	var errs int
+	for i := 0; i < 5; i++ {
+		if _, err := e.reconcile(); err != nil {
+			errs++
+		}
+	}
+	if errs != 0 {
+		t.Errorf("%d reconcile errors for a rejected key; want 0 (no retry storm)", errs)
+	}
+	m := e.get()
+	c := cond(m, pxv1a1.ConditionUpToDate)
+	if c.Status != metav1.ConditionFalse || c.Reason != pxv1a1.ReasonInvalidConfiguration ||
+		!strings.Contains(c.Message, "SSH public key") {
+		t.Errorf("UpToDate = %s %s: %s", c.Status, c.Reason, c.Message)
+	}
+	if r := cond(m, pxv1a1.ConditionInfrastructureReady); r.Status != metav1.ConditionTrue {
+		t.Errorf("InfrastructureReady = %s %s; the VM itself is fine", r.Status, r.Reason)
+	}
+
+	// A key the template cannot even be provisioned with blocks readiness.
+	e2 := newEnv(t)
+	e2.setParent(func(vm *kubevmv1a1.VirtualMachine) {
+		vm.Spec.SSHPublicKeys = []string{"garbage"}
+	})
+	e2.until("InvalidConfiguration", 10,
+		hasReason(pxv1a1.ConditionInfrastructureReady, pxv1a1.ReasonInvalidConfiguration))
+	if got := e2.px.CallsWithPrefix("start"); got != nil {
+		t.Errorf("VM started despite rejected provisioning: %v", got)
+	}
 }

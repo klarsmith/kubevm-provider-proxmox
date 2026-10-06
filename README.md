@@ -34,7 +34,8 @@ power, delete. Details, and the bugs real Proxmox found, are in
 Not implemented yet, and reported as `UpToDate=False/UnsupportedByProvider`
 when asked for: data disks, cloud-init user/network data from Secrets,
 named instance types, network references, IPv6 static addresses,
-`Suspended`, and `deleteOnTermination: false`.
+`Suspended`, `deleteOnTermination: false`, and a few more listed in the
+[user guide](docs/user-guide.md#what-maps-to-what).
 
 ## How it works, briefly
 

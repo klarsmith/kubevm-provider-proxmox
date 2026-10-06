@@ -70,7 +70,10 @@ func (r *Reconciler) converge(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 	// cache that lags by several seconds; trusting it reported a VM that was
 	// crash-looping on start as Ready, and repeated stops on delete.
 	if err := r.refreshLiveStatus(ctx, px, vm); errors.Is(err, proxmox.ErrNotFound) {
-		return r.vanished(m)
+		// Listed on this node a moment ago, gone from it now: a migration
+		// landed in between, or the VM was just destroyed. The next listing
+		// tells which; only a VM missing from the listing is reported gone.
+		return ctrl.Result{RequeueAfter: requeueSoon}, nil
 	} else if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -151,6 +154,11 @@ func (r *Reconciler) pollPendingTask(ctx context.Context, m *pxv1a1.ProxmoxMachi
 	}
 
 	m.Status.PendingTask, m.Status.PendingOp = "", ""
+	if !isOwnOp(op) {
+		// A migration or disk move someone else started: we only waited
+		// for it. Its outcome is not ours to report or back off from.
+		return false, ctrl.Result{RequeueAfter: requeueSoon}, nil
+	}
 	if ts.Failed() && op == pxv1a1.OpClone {
 		// PVE removes a failed clone's partial VM. Keep the reserved ID and
 		// go back to "reserved, not sent": resumeClone re-sends after the
@@ -258,6 +266,15 @@ func opForTaskType(typ string) string {
 	return typ // someone else's task, e.g. qmigrate: wait for it all the same
 }
 
+// isOwnOp reports whether op is one this controller starts.
+func isOwnOp(op string) bool {
+	switch op {
+	case pxv1a1.OpClone, pxv1a1.OpResize, pxv1a1.OpStart, pxv1a1.OpShutdown, pxv1a1.OpStop, pxv1a1.OpDelete:
+		return true
+	}
+	return false
+}
+
 func isPowerOp(op string) bool {
 	return op == pxv1a1.OpStart || op == pxv1a1.OpShutdown || op == pxv1a1.OpStop
 }
@@ -350,7 +367,9 @@ func (r *Reconciler) observe(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 		setCondition(m, notReady(pxv1a1.ReasonPowerChanging, fmt.Sprintf("VM %d is %s", vm.VMID, vm.Status)))
 	}
 
-	if hasUnsupported(notes) {
+	if hasRejected(notes) {
+		setCondition(m, upToDate(false, pxv1a1.ReasonInvalidConfiguration, strings.Join(notes, "; ")))
+	} else if hasUnsupported(notes) {
 		setCondition(m, upToDate(false, pxv1a1.ReasonUnsupportedByProvider, strings.Join(notes, "; ")))
 	} else {
 		setCondition(m, upToDate(true, pxv1a1.ReasonApplied, strings.Join(notes, "; ")))
@@ -358,10 +377,21 @@ func (r *Reconciler) observe(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 	return res, nil
 }
 
-// hasUnsupported tells informational notes (agent down) from real gaps.
+// hasUnsupported tells informational notes (agent down, next-boot) from
+// real gaps.
 func hasUnsupported(notes []string) bool {
 	for _, n := range notes {
-		if !strings.HasPrefix(n, "guest agent") {
+		if !strings.HasPrefix(n, "guest agent") && !strings.HasPrefix(n, "cloud-init/network changes") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRejected reports a setting Proxmox refused: a configuration error.
+func hasRejected(notes []string) bool {
+	for _, n := range notes {
+		if strings.HasPrefix(n, "rejected by Proxmox") {
 			return true
 		}
 	}

@@ -190,7 +190,8 @@ type ProxmoxMachineStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// VMID of the Proxmox VM, recorded as soon as the clone call returns.
+	// VMID of the Proxmox VM, reserved and written before the clone is
+	// sent, so a retry can never clone into a second ID.
 	// +optional
 	VMID int `json:"vmid,omitempty"`
 
@@ -216,6 +217,13 @@ type ProxmoxMachineStatus struct {
 	// status.
 	// +optional
 	LastFailure string `json:"lastFailure,omitempty"`
+
+	// CloneRefusals counts consecutive clone attempts refused with "already
+	// exists" while nothing visible holds the reserved VMID and no clone is
+	// running. After a few, the holder is taken to be a VM this token cannot
+	// see, and a new VMID is reserved.
+	// +optional
+	CloneRefusals int32 `json:"cloneRefusals,omitempty"`
 
 	// NextAttempt is when the controller may start another Proxmox task
 	// after a failure. It grows exponentially with ConsecutiveFailures, so a
@@ -243,7 +251,6 @@ const (
 // Condition reasons.
 const (
 	ReasonNotAdopted            = "NotAdopted"
-	ReasonAlreadyOwned          = "AlreadyOwned"
 	ReasonInvalidConfiguration  = "InvalidConfiguration"
 	ReasonUnsupportedByProvider = "UnsupportedByProvider"
 	ReasonProvisioning          = "Provisioning"

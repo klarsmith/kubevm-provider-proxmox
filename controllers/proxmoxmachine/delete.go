@@ -127,7 +127,9 @@ func (r *Reconciler) destroy(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 	}
 
 	var upid, op string
-	if vm.Status == "running" {
+	if vm.Status != "stopped" {
+		// Includes paused and prelaunch: PVE refuses to destroy a VM with a
+		// live QEMU process, whatever its guest is doing.
 		op = pxv1a1.OpStop
 		upid, err = px.Stop(ctx, vm.Node, vm.VMID)
 	} else {

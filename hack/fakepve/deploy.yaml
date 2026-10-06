@@ -1,0 +1,43 @@
+# Fake Proxmox API inside the cluster, for an in-cluster test of the
+# manager. Reachable as http://fakepve.team-a.svc:8006; the matching
+# credentials Secret is in this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fakepve
+  namespace: team-a
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fakepve}
+  template:
+    metadata:
+      labels: {app: fakepve}
+    spec:
+      containers:
+        - name: fakepve
+          image: fakepve:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8006
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fakepve
+  namespace: team-a
+spec:
+  selector: {app: fakepve}
+  ports:
+    - port: 8006
+      targetPort: 8006
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pve-credentials
+  namespace: team-a
+stringData:
+  url: http://fakepve.team-a.svc:8006
+  tokenID: kubevm@pve!dev
+  tokenSecret: dev

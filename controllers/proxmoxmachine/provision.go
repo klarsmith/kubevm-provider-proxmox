@@ -4,6 +4,7 @@ package proxmoxmachine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -37,13 +38,24 @@ func (r *Reconciler) provision(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 		params.Set("tags", joinTags(cfg["tags"], "kubevm"))
 	}
 	if len(params) > 0 {
-		if err := px.SetConfig(ctx, vm.Node, vm.VMID, params); err != nil {
+		if err := px.SetConfig(ctx, vm.Node, vm.VMID, params); errors.Is(err, proxmox.ErrInvalidParameter) {
+			// The VM cannot be provisioned as asked. Reported, not retried:
+			// only a spec change can fix it, and that triggers a reconcile.
+			setCondition(m, notReady(pxv1a1.ReasonInvalidConfiguration,
+				fmt.Sprintf("Proxmox rejected the configuration for VM %d: %v", vm.VMID, err)))
+			setCondition(m, upToDate(false, pxv1a1.ReasonInvalidConfiguration, err.Error()))
+			return ctrl.Result{RequeueAfter: resyncPeriod}, false, nil
+		} else if err != nil {
 			return ctrl.Result{}, false, fmt.Errorf("configuring VM %d: %w", vm.VMID, err)
 		}
 	}
 
-	if upid, err := r.growBootDisk(ctx, m, px, vm, cfg); err != nil || upid != "" {
-		return ctrl.Result{RequeueAfter: r.pollDelay()}, false, err
+	upid, err := r.growBootDisk(ctx, m, px, vm, cfg)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if upid != "" {
+		return ctrl.Result{RequeueAfter: r.pollDelay()}, false, nil
 	}
 
 	m.Status.Provisioned = true
@@ -61,6 +73,24 @@ func (r *Reconciler) applyDrift(ctx context.Context, m *pxv1a1.ProxmoxMachine,
 	}
 
 	var notes []string
+	// cloud-init settings and the VM name can be written any time; the
+	// guest picks them up at its next boot.
+	ci := cloudInitParams(m, cfg)
+	if name := vmName(m); cfg["name"] != name {
+		ci.Set("name", name)
+	}
+	if len(ci) > 0 {
+		switch err := px.SetConfig(ctx, vm.Node, vm.VMID, ci); {
+		case errors.Is(err, proxmox.ErrInvalidParameter):
+			// A key or option Proxmox cannot accept: a configuration error
+			// on UpToDate, not an API failure to retry.
+			notes = append(notes, "rejected by Proxmox: "+err.Error())
+		case err != nil:
+			return nil, ctrl.Result{}, fmt.Errorf("updating cloud-init of VM %d: %w", vm.VMID, err)
+		case vm.Status != "stopped":
+			notes = append(notes, "cloud-init/network changes take effect at the next boot")
+		}
+	}
 	if params := sizingParams(m, cfg); len(params) > 0 {
 		if vm.Status == "stopped" {
 			if err := px.SetConfig(ctx, vm.Node, vm.VMID, params); err != nil {

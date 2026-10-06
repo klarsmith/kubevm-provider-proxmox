@@ -79,6 +79,22 @@ and the controller never writes them:
 | `caBundle` | no | PEM CA for the Proxmox certificate |
 | `insecureSkipVerify` | no | `"true"` to skip TLS verification (test setups only) |
 
+The manager reads the Secret straight from the API server on every
+reconcile (not through its cache), which is why its RBAC needs only `get`
+on Secrets.
+
+## Manager flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--allowed-pool` | `kubevm-dev` | the only Proxmox pool the controller acts in |
+| `--leader-elect` | `false` | leader election, for more than one replica |
+| `--health-probe-bind-address` | `:8081` | `/healthz` and `/readyz` |
+| `--metrics-bind-address` | `0` (disabled) | Prometheus metrics endpoint |
+
+Logging flags (`--zap-log-level`, `--zap-devel`, ...) come from
+controller-runtime.
+
 ## Status
 
 | Field | Meaning |
@@ -88,9 +104,22 @@ and the controller never writes them:
 | `providerID` | `proxmox://<cluster>/<vmid>`; on an unclustered host `<cluster>` is the node name |
 | `providerMetadata` | `node`, `vmid`, `pool`, `template`, `pveVersion` |
 | `vmid` | the Proxmox VMID, reserved before the clone is sent |
-| `pendingTask` / `pendingOp` | UPID and kind of the Proxmox task in flight |
+| `pendingTask` / `pendingOp` | UPID and kind of the Proxmox task in flight: `Clone`, `Resize`, `Start`, `Shutdown`, `Stop` or `Delete` |
 | `provisioned` | pre-boot configuration done |
 | `consecutiveFailures`, `lastFailure`, `nextAttempt` | failure streak and when the next task may start |
+| `cloneRefusals` | consecutive clones refused with "already exists" while nothing visible holds the reserved VMID; after three the reservation moves on |
+| `observedGeneration` | the generation the conditions describe |
+
+Each address has `interface` (the portable interface name where the MAC
+matches, else the guest's NIC name), `type` (always `InternalIP`) and
+`address`.
+
+Every VM the provider creates carries the tag `kubevm` and a first
+description line `kubevm-uid=<ProxmoxMachine UID>`. The description line
+is how the controller recognises its own VMs after a crash; do not edit it.
+
+`kubectl get pxm` (short name for `proxmoxmachines`) shows VMID, power
+state, template and the `InfrastructureReady` status as columns.
 
 ### Conditions
 
@@ -105,14 +134,14 @@ and the controller never writes them:
 | `PowerChanging` | Ready=False | a power task was just sent |
 | `TaskFailed` | Ready=False and/or UpToDate=False | a task failed; message has the Proxmox exit status and the next attempt time |
 | `NotAdopted` | Ready=False | the two-sided link is incomplete |
-| `InvalidConfiguration` | Ready=False | e.g. no template of that name, static address without prefix length, unreadable Secret |
-| `OutsidePool` | Ready=False | `spec.pool` or the VM's actual pool is not the allowed pool; nothing is done |
-| `VMGone` | Ready=False | the VM was removed outside Kubernetes; it is not recreated |
+| `InvalidConfiguration` | Ready=False, or UpToDate=False | no template of that name, static address without prefix length, unreadable Secret, or a value Proxmox rejected (Ready=False if that blocks provisioning, UpToDate=False after first boot) |
+| `OutsidePool` | Ready=False | `spec.pool` or the VM's actual pool is not the allowed pool; nothing is done. Re-checked every 2 min, so moving the VM back resumes |
+| `VMGone` | Ready=False | the VM was removed outside Kubernetes; it is not recreated. Re-checked every 2 min |
 | `Paused` | Ready=False | the VM is paused, by a user or by QEMU on an I/O error such as full storage; not acted on |
 | `APIError` | Ready=False | a Proxmox API call failed |
 | `Deleting` | Ready=False | delete in progress |
 | `Applied` | UpToDate=True | the spec is applied |
-| `UnsupportedByProvider` | UpToDate=False | some asked-for fields are not implemented |
+| `UnsupportedByProvider` | UpToDate=False (and Ready=False when a delete is blocked by `deleteOnTermination: false`) | some asked-for fields are not implemented |
 
 ## Power
 
@@ -132,10 +161,27 @@ clears the streak. So does changing `powerState` or `powerOffMode`: a new
 request is not held back by the old one's failures.
 
 The provider waits for VM lifecycle tasks it finds running (start,
-shutdown, stop, clone, destroy, resize, migrate, disk move), including
-ones started outside Kubernetes. Consoles, backups and other tasks are
-ignored. If one holds a lock that makes a power task fail, that failure
-backs off like any other.
+shutdown, stop, reboot, clone, destroy, resize, migrate, disk move),
+including ones started outside Kubernetes. A failure of a task it only
+waited for is not counted against the machine. Consoles, backups and
+other tasks are ignored; if one holds a lock that makes a power task
+fail, that failure backs off like any other.
+
+## Changes after first boot
+
+Resolved fields are re-applied on every reconcile:
+
+- `cpus` and `memory`: applied while the VM is stopped; while it runs,
+  `UpToDate` says the change waits for the next power-off.
+- `bootDisk.sizeGiB`: the disk is grown at any time, never shrunk.
+- cloud-init fields (`sshPublicKeys`, `nameservers`, `searchDomains`,
+  `interfaces`): written to the VM at once; the guest picks them up at its
+  next boot, and `UpToDate` says so while it runs. `network.hostName` is
+  immutable on the `VirtualMachine` (KubeVM's own validation), so it never
+  drifts.
+- A value Proxmox refuses (an SSH key it cannot parse, say) is reported as
+  `UpToDate=False/InvalidConfiguration` with Proxmox's message, and not
+  retried until the spec changes.
 
 ## Networking
 
@@ -157,7 +203,8 @@ Addresses only appear when the QEMU guest agent runs in the guest and
 Deleting the `VirtualMachine` deletes the `ProxmoxMachine`, which:
 
 1. waits for any running task, including an unfinished clone;
-2. hard-stops the VM if it is running;
+2. hard-stops the VM unless it is already stopped (a paused VM counts as
+   not stopped);
 3. destroys it with `purge=1` and `destroy-unreferenced-disks=1`;
 4. destroys any other VM in the pool carrying this machine's
    `kubevm-uid=` marker;
@@ -184,7 +231,7 @@ deleting a whole namespace: delete the `VirtualMachine`s first.
 | `InvalidConfiguration: no Proxmox template named ...` | the template's name, that it is a template, and that the token can see it (`VM.Audit` on `/vms/<id>`) |
 | Ready but no addresses | the guest agent in the guest and `agent: 1` on the template; on PVE 9 the token needs `VM.GuestAgent.Audit` |
 | `TaskFailed` | `status.lastFailure` has Proxmox's exit status; the task log in the Proxmox UI has the rest |
-| Delete hangs | the credentials Secret still exists; `status.nextAttempt` (a failed stop or destroy backs off) |
+| Delete hangs | check the credentials Secret still exists, and `status.nextAttempt` (a failed stop or destroy backs off) |
 
 For a direct look at what the token sees, `go run ./hack/pvels <credentials.yaml>`
 lists VMs with pool, marker, running tasks, and the log of the last failed

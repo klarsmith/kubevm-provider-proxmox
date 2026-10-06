@@ -107,6 +107,12 @@ func (c *HTTPClient) do(ctx context.Context, method, path string,
 			strings.Contains(msg, "no such task") {
 			return fmt.Errorf("%w: %s", ErrNotFound, msg)
 		}
+		// 400 is a parameter the schema rejected. Some validations run after
+		// schema checks and answer 500 with a "validation error" message.
+		if resp.StatusCode == http.StatusBadRequest ||
+			strings.Contains(msg, "validation error") || strings.Contains(msg, "invalid format") {
+			return fmt.Errorf("%w: %s", ErrInvalidParameter, msg)
+		}
 		return errors.New(msg)
 	}
 

@@ -18,6 +18,11 @@ import (
 // ErrNotFound means the VM or task the call named does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrInvalidParameter means Proxmox rejected what it was asked to set (an
+// SSH key it cannot parse, a malformed option). Retrying the same request
+// cannot succeed; the configuration has to change.
+var ErrInvalidParameter = errors.New("invalid parameter")
+
 // VM is one QEMU guest as listed by /cluster/resources.
 type VM struct {
 	VMID     int

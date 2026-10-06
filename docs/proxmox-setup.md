@@ -75,7 +75,8 @@ Notes:
   `VM.GuestAgent.Audit`. On PVE 8, use `VM.Monitor` instead.
 - `/vms/<template id>` lets the token see and clone the template.
 - If the template uses a cloud-init snippet (`cicustom`), also grant the
-  role on the storage holding it (e.g. `/storage/local`).
+  role on the storage holding it; `hack/pve-dev-setup.sh` grants
+  `/storage/local` for exactly this reason.
 - `/sdn/zones/localnetwork/<bridge>` grants `SDN.Use` on the bridge
   (PVE 8+). Add one entry per bridge.
 - `PVEAuditor` on `/` (not propagated) is for `/cluster/status`, which

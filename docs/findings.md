@@ -8,7 +8,7 @@ differs from `kubevm-provider-container`. Same purpose as that provider's
 Verified against `vmware-tanzu/vm-operator@feature/kube-vm`, commit
 `c2daa3ae` (2026-09-22), unless stated otherwise.
 
-## Upstream state (Phase 0, 2026-10-04)
+## Upstream state (checked 2026-10-04)
 
 - KubeVM has **not** been split out yet. It still lives in
   `vm-operator/external/kubevm` on `feature/kube-vm`. This provider is a
@@ -186,6 +186,9 @@ changing the power request clears an earlier failure backoff.
 
 ### Rechecked on real PVE 9.2.9 (arm64) after the review
 
+- **The clone lock placeholder** (fix 2 above) is still unverified: a
+  lost status write cannot be forced from outside, so no real run has
+  shown the placeholder config.
 - **The clone task is filed under the template's VMID** (`"id":"9000"`,
   UPID `...:qmclone:9000:...`), as fix 3 assumes. It is visible in
   `/nodes/{node}/tasks?source=active&vmid=<template>` while it runs.
@@ -203,6 +206,66 @@ changing the power request clears an earlier failure backoff.
 
 Not exercised on real PVE: a lost status write (it cannot be forced from
 outside), and an actually paused VM (pausing needs root).
+
+## Second review, after the x86 run
+
+A second independent review found ten more items. All are fixed, with
+regression tests in `review_test.go`, and the full lifecycle was rerun on
+real PVE afterwards.
+
+1. **In-cluster deployment would hang.** The manager read Secrets through
+   its cache. The first cached read starts a cluster-wide Secret informer,
+   which needs `list` and `watch`; the RBAC grants only `get`, so the
+   informer never syncs and the one worker blocks forever. Every real-PVE
+   run had used an admin kubeconfig from a laptop, so this never showed.
+   Secrets now bypass the cache (`client.CacheOptions.DisableFor`), and the
+   in-cluster path is exercised against `hack/fakepve` on kind.
+2. **Delete never finished for a paused VM.** Destroy only stopped a
+   `running` VM; a paused one still has a QEMU process and PVE refuses to
+   destroy it. Anything not `stopped` is stopped first.
+3. **A reserved VMID held by an invisible VM waited forever.** If another
+   pool's VM took the ID in the nextid race, every clone was refused and
+   nothing was ever listed at the ID. Three refusals with no clone task
+   running (`status.cloneRefusals`) now release the reservation; our own
+   finished clone would be in our pool and listed by then, and the marker
+   lookup adopts it if the listing is merely slow.
+4. **Cloud-init, NIC and hostname edits after first boot were dropped**
+   with `UpToDate=True`. They are now written to the VM config on every
+   drift pass and reported as taking effect at the next boot.
+5. The stale-reconcile conflict was wrapped as a Conflict, so
+   `RetryOnConflict` retried it five times. It is a plain error now.
+6. **A foreign task's failure became our backoff.** A failed migration we
+   had only waited for was recorded as our failure. Only tasks this
+   controller starts count.
+7. A new HTTP transport per reconcile. One client per credentials is
+   cached.
+8. **A migration between the listing and the live-status read read as
+   `VMGone`.** The old node's `/status/current` answers not-found; that
+   now requeues for a fresh listing instead of declaring the VM gone.
+9. The VirtualMachine watch had no predicate, so the core's status writes
+   and our own nudge annotation each cost a full Proxmox round. It now
+   fires on generation changes only.
+10. A `Result` returned together with an error (ignored by
+    controller-runtime). Cosmetic.
+
+Found while verifying fix 4 on real PVE:
+
+11. **A parameter Proxmox rejects was an `APIError` retried on the error
+    backoff.** Setting a malformed SSH key produced 15 reconcile errors in
+    two minutes, each a `PUT /config` answered `500 SSH public key
+    validation error`. A 400, or a 500 whose message says "validation
+    error" or "invalid format", is now `ErrInvalidParameter`: before first
+    boot it is `InfrastructureReady=False/InvalidConfiguration`, after it
+    `UpToDate=False/InvalidConfiguration`, and nothing is retried until
+    the spec changes. Real PVE answers 500, not 400, for this case.
+12. **`network.hostName` is immutable on the KubeVM `VirtualMachine`**
+    (a CEL rule in the upstream API), so the hostname never drifts. The
+    drift code handles it anyway, harmlessly.
+
+Rerun on real PVE 9.2.9 after these fixes: create, guest-agent IP, an SSH
+key change applied to the running VM's config with the next-boot note, a
+rejected key reported as `InvalidConfiguration` without a retry storm,
+power off, delete.
 
 ## Async tasks
 
@@ -409,9 +472,9 @@ change it.
 |---|---|
 | `PoweredOn` | `status/start` |
 | off, `Hard` | `status/stop` |
-| off, `Soft` | `status/shutdown` (timeout 180 s, `forceStop=0`). A guest that does not comply fails the task. Reported on `UpToDate=False/TaskFailed`, retried after 1 min, **never** escalated to stop |
+| off, `Soft` | `status/shutdown` (timeout 180 s, `forceStop=0`). A guest that does not comply fails the task. Reported on `UpToDate=False/TaskFailed`, retried with the failure backoff, **never** escalated to stop |
 | off, `TrySoft` (and unset) | `status/shutdown` (timeout 180 s, `forceStop=1`). Proxmox itself stops the VM after the timeout |
-| `Suspended` | `UpToDate=False/UnsupportedByProvider` (Phase 6) |
+| `Suspended` | `UpToDate=False/UnsupportedByProvider` (not implemented yet) |
 
 Observed: `running` → `PoweredOn`, `stopped` → `PoweredOff`. While a power
 task is in flight, `status.powerState` is absent.
@@ -440,8 +503,9 @@ works at any time.
   `scsi*/virtio*/sata*/ide*`, skipping cdrom and cloud-init drives
   (`TestBootDisk`).
 - **sshkeys encoding.** The stored value must be percent-encoded with spaces
-  as `%20`, not `+`, and it is then form-encoded again on the wire. *VERIFY on
-  real PVE.* This is the most commonly reported gotcha.
+  as `%20`, not `+`, and it is then form-encoded again on the wire. Verified
+  on real PVE by logging in with the injected key. This is the most commonly
+  reported gotcha.
 - **NICs.** For each portable interface N, the controller sets `netN` and
   keeps the template's model and MAC (`withBridge`), changing only the
   bridge. A new NIC gets `virtio` and a fresh MAC.
@@ -461,7 +525,7 @@ works at any time.
 ## Networking gotcha: bare IPs
 
 KubeVM `interfaces[].addresses` are bare IPs. Proxmox `ipconfigN` needs a
-CIDR, and a gateway for anything routed. The MVP takes both from
+CIDR, and a gateway for anything routed. For now both come from
 provider-only fields (`staticIPPrefixLength`, `gateway`). A static address
 without a prefix length is rejected as `InvalidConfiguration` before any
 Proxmox call. Static IPv6 and `dhcp6` are `UnsupportedByProvider`.
@@ -469,18 +533,22 @@ Proxmox call. Static IPv6 and `dhcp6` are `UnsupportedByProvider`.
 This is the second contract finding worth raising upstream. Platforms that
 configure the guest directly (Proxmox cloud-init, vSphere customization)
 need the prefix and gateway. Platforms that hand out addresses (EC2, GCE)
-don't. Phase 6 moves this to a `ProxmoxNetwork` object referenced by
-`interfaces[].network`.
+don't. The planned follow-up is a `ProxmoxNetwork` object referenced by
+`interfaces[].network`, carrying bridge, VLAN, prefix and gateway.
 
 ## Delete
 
 The finalizer holds the object. The flow:
 
 1. Wait for any pending task, including a clone in flight
-   (`TestDeleteMidClone`).
-2. Hard-stop if running.
-3. `DELETE ?purge=1&destroy-unreferenced-disks=1`.
-4. Poll, then release the finalizer.
+   (`TestDeleteMidClone`), and settle an unrecorded reservation without
+   ever sending a clone.
+2. Hard-stop unless already stopped (a paused VM still has a QEMU
+   process, and PVE refuses to destroy it).
+3. `DELETE ?purge=1&destroy-unreferenced-disks=1`, poll.
+4. Sweep: destroy any other VM in the pool carrying this machine's
+   marker.
+5. Release the finalizer.
 
 A VM that is already gone, or that has left the pool, releases the finalizer
 straight away. `bootDisk.deleteOnTermination: false` blocks deletion with
@@ -498,11 +566,12 @@ endpoint needed. It wasn't used because:
   and assumes a stable node;
 - a much larger surface would sit behind the fake.
 
-The provider needs 16 calls. `internal/proxmox.HTTPClient` is about 300
-lines with token auth, sits behind the `Client` interface, and is tested over
-real HTTP against `proxmoxfake.Server`.
+The provider needs 16 calls. `internal/proxmox.HTTPClient` is a small
+token-authenticated client behind the `Client` interface, tested over real
+HTTP against `proxmoxfake.Server`. One client is cached per distinct
+credentials, so TLS connections are reused across reconciles.
 
-## Unsupported in the MVP (reported, not ignored)
+## Not implemented yet (reported, not ignored)
 
 All of these surface on `UpToDate=False/UnsupportedByProvider` with a
 message:
@@ -512,15 +581,16 @@ message:
 - bootDisk snapshot/blank sources
 - `storageClassName`, `volumeAttributesClassName`
 - `interfaces[].network`, `publicIP`, `dhcp6`, static IPv6
-- `bootstrap.cloudInit.userData/networkData` (CHECKPOINT 5, deferred)
+- `bootstrap.cloudInit.userData/networkData` (needs a snippet or a NoCloud
+  ISO path; the delivery mechanism is not decided yet)
 - `failureDomain`, `scheduling.spot`, `tags`
 - `Suspended`
 
 ## Token privileges
 
-These privileges are for PVE 8/9. **VERIFY** them on the target version:
-privilege names change between releases. Grant them on the pool (or on
-`/vms/<id>` for the template) and on the storage and bridge in use:
+Verified on PVE 9.2 (arm64 and amd64); privilege names change between
+releases, so recheck on PVE 8. Grant them on the pool (or on `/vms/<id>`
+for the template) and on the storage and bridge in use:
 
 - `VM.Clone` on the template; `VM.Allocate` on `/pool/kubevm-dev` (new VMID)
 - `VM.Config.Disk`, `VM.Config.CPU`, `VM.Config.Memory`,
@@ -530,4 +600,5 @@ privilege names change between releases. Grant them on the pool (or on
   `VM.Monitor`; on PVE 8 use `VM.Monitor`.
 - `Datastore.AllocateSpace` and `Datastore.Audit` on the clone storage
 - `SDN.Use` on the bridge/zone (PVE 8+)
-- `Sys.Audit` on `/` for `/cluster/status`
+- `PVEAuditor` on `/`, not propagated, for `/cluster/status` (the cluster
+  name in `providerID`)

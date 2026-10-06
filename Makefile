@@ -1,5 +1,5 @@
 # Targets mirror kubevm-provider-container's Makefile. `make test` never
-# reaches a real Proxmox: the controller runs against internal/proxmox.Fake.
+# reaches a real Proxmox: the controller runs against proxmoxfake.Fake.
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
@@ -95,7 +95,7 @@ undeploy: ## Remove the manager
 ##@ Local test PVE (Apple Silicon)
 
 .PHONY: mac-pve-iso
-mac-pve-iso: ## Build the unattended PVE ISO (PVE_ARCH=arm64|amd64)
+mac-pve-iso: ## Build the unattended PVE ISO (PVE_ARCH=arm64|amd64|nested)
 	hack/mac-pve/build-iso.sh
 
 .PHONY: mac-pve-run

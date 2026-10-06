@@ -10,9 +10,12 @@ package proxmoxmachine
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -21,9 +24,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kubevmv1a1 "github.com/vmware-tanzu/vm-operator/external/kubevm/api/v1alpha1"
@@ -73,6 +78,9 @@ type Reconciler struct {
 
 	// Now overrides the clock (tests). Nil means time.Now.
 	Now func() time.Time
+
+	// httpClients caches real Proxmox clients by credentials.
+	httpClients sync.Map
 }
 
 func (r *Reconciler) now() time.Time {
@@ -254,13 +262,30 @@ func (r *Reconciler) proxmoxClient(ctx context.Context, m *pxv1a1.ProxmoxMachine
 	}
 	factory := r.NewProxmoxClient
 	if factory == nil {
-		factory = func(c proxmox.Credentials) (proxmox.Client, error) { return proxmox.NewHTTPClient(c) }
+		factory = r.cachedHTTPClient
 	}
 	px, err := factory(creds)
 	if err != nil {
 		return nil, fmt.Errorf("credentials Secret %q: %w", key.Name, err)
 	}
 	return px, nil
+}
+
+// cachedHTTPClient returns one HTTP client per distinct credentials, so
+// TLS connections are reused across reconciles instead of a new transport
+// (and handshake) per pass.
+func (r *Reconciler) cachedHTTPClient(c proxmox.Credentials) (proxmox.Client, error) {
+	sum := sha256.Sum256([]byte(c.URL + "\x00" + c.TokenID + "\x00" + c.TokenSecret + "\x00" +
+		string(c.CABundle) + "\x00" + strconv.FormatBool(c.InsecureSkipVerify)))
+	if px, ok := r.httpClients.Load(sum); ok {
+		return px.(proxmox.Client), nil
+	}
+	px, err := proxmox.NewHTTPClient(c)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := r.httpClients.LoadOrStore(sum, px)
+	return actual.(proxmox.Client), nil
 }
 
 // credentialsError reports an unusable credentials Secret and returns the
@@ -341,7 +366,8 @@ func (w *statusWriter) flush(ctx context.Context, m *pxv1a1.ProxmoxMachine) erro
 			return gerr
 		}
 		if !equality.Semantic.DeepEqual(fresh.Status, w.base.Status) {
-			return fmt.Errorf("status changed since this reconcile read it: %w", err)
+			// Not wrapped: RetryOnConflict would retry a wrapped Conflict.
+			return fmt.Errorf("status changed since this reconcile read it: %v", err)
 		}
 		w.base = fresh.DeepCopy()
 		m.ResourceVersion = fresh.ResourceVersion
@@ -405,8 +431,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&pxv1a1.ProxmoxMachine{}).
+		// Spec edits bump the generation; the core's status writes and our
+		// own nudge annotation do not, and must not cost a Proxmox round.
 		Watches(&kubevmv1a1.VirtualMachine{},
-			handler.EnqueueRequestsFromMapFunc(machineForVirtualMachine)).
+			handler.EnqueueRequestsFromMapFunc(machineForVirtualMachine),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 

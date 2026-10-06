@@ -31,6 +31,9 @@ make install    # apply both CRDs to the current kubectl context
 make run        # run the manager against the current kubectl context
 ```
 
+Those are the everyday ones; `make help` lists the rest (build, image,
+deploy, the Mac PVE targets, `kubevm-crd`).
+
 The module needs Go 1.26 or newer (go.mod), set by k8s.io 0.37 and
 controller-runtime 0.25. CI also builds with the newest stable Go.
 
@@ -80,9 +83,9 @@ make mac-pve-run                 # first run installs and exits; run again to bo
 
 On first boot, `hack/pve-dev-setup.sh` creates the pool, a Debian template
 and a token, then prints a credentials Secret to the serial console
-(`.local/pve-vm/serial.log`). Save it as `.local/credentials.yaml` and apply
-it, then run the manager and apply `config/samples/virtualmachine-pve-dev.yaml`
-with your SSH key filled in.
+(`.local/pve-vm/serial.log`). Save it as `.local/credentials.yaml`, create
+the `team-a` namespace and apply it, then run the manager and apply
+`config/samples/virtualmachine-pve-dev.yaml` with your SSH key filled in.
 
 | | arm64 | amd64 |
 |---|---|---|
@@ -98,6 +101,22 @@ Inspect what the token sees:
 
 ```sh
 go run ./hack/pvels .local/credentials.yaml
+```
+
+### In-cluster, against the fake Proxmox
+
+The manager's own Deployment (RBAC, Secret access, probes) is tested on
+kind with the fake Proxmox running as a Pod:
+
+```sh
+docker build -f hack/fakepve/Dockerfile -t fakepve:dev .
+make image-build
+kind load docker-image fakepve:dev ghcr.io/klarsmith/kubevm-provider-proxmox:dev --name kubevm-dev
+kubectl create namespace team-a
+kubectl apply -f hack/fakepve/deploy.yaml   # fakepve + its credentials Secret
+make deploy
+kubectl apply -f config/samples/virtualmachine.yaml
+kubectl get vm -n team-a -w
 ```
 
 ### Against a throwaway PVE elsewhere
@@ -117,7 +136,8 @@ is `1`). An unattended ISO with a static address:
 
 ```sh
 make mac-pve-iso PVE_ARCH=nested STATIC_CIDR=10.25.0.104/24 STATIC_GW=10.25.0.1 STATIC_DNS=10.25.0.1
-# copy .local/pve-nested/pve-auto.iso to the host's ISO storage, then e.g.:
+# upload .local/pve-nested/pve-auto.iso to the host's ISO storage as
+# kubevm-pve-nested.iso, then e.g.:
 qm create 104 --name kubevm-pve-nested --memory 8192 --cores 4 --cpu host --ostype l26 \
   --machine q35 --virtio0 local-zfs:64 --net0 virtio,bridge=vmbr1 \
   --cdrom local:iso/kubevm-pve-nested.iso --boot "order=virtio0;ide2"

@@ -22,9 +22,18 @@ renames that heading to the version and date (see
 - `ProxmoxMachine` (`infrastructure.kube-vm.io/v1alpha1`): backs a KubeVM
   `VirtualMachine` with a Proxmox VE QEMU VM cloned from a template.
 - Lifecycle driven from the portable `VirtualMachine` alone: clone, size
-  (cores, memory, boot disk grow), native cloud-init (user, SSH keys,
-  hostname, DNS, DHCP or static IPv4), power on/off with `Hard`, `Soft` and
-  `TrySoft`, guest-agent addresses, and delete.
+  (cores, memory, boot disk grow), native cloud-init (SSH keys, hostname,
+  DNS, DHCP or static IPv4; the cloud-init user is a provider-only field),
+  power on/off with `Hard`, `Soft` and `TrySoft`, guest-agent addresses,
+  and delete. Edits after first boot are re-applied: sizing while stopped,
+  disk growth any time, cloud-init for the next boot.
+- A setting Proxmox rejects (e.g. an unparsable SSH key) is reported as
+  `InvalidConfiguration` and not retried as an API error.
+- Validation and guards: a static address without `staticIPPrefixLength`
+  is rejected before any Proxmox call; `deleteOnTermination: false` blocks
+  deletion instead of destroying disks; LXC containers count as VMID
+  holders; a reserved VMID held by a VM the token cannot see is given up
+  after three refused clones.
 - Pool guard: the manager only creates, changes or deletes VMs in the pool
   named by `--allowed-pool` (default `kubevm-dev`).
 - Crash-safe creation: the VMID is reserved in status before the clone is
@@ -38,12 +47,21 @@ renames that heading to the version and date (see
   `status.nextAttempt`. A new power request resets the backoff, and only
   failed stops or destroys delay deletion.
 - Decisions use each VM's live state (`/status/current`), not the cluster
-  resource listing, which lags. Paused VMs report `Paused`, not Ready.
+  resource listing, which lags. Paused VMs report `Paused`, not Ready, and
+  are stopped before destroy. A VM mid-migration is re-listed, not reported
+  gone.
+- Every created VM carries the tag `kubevm` and a `kubevm-uid=` description
+  line. Running VM lifecycle tasks started outside Kubernetes are waited
+  for (their failures are not counted); consoles and backups are ignored.
+- Manager: `--allowed-pool`, `--leader-elect`, health probes, optional
+  metrics. Credentials Secrets are read directly (RBAC: `get` only). One
+  Proxmox HTTP client per credentials.
 - KubeVM core controller hosted in the same manager, plus an annotation
   nudge on the parent `VirtualMachine` so status changes after readiness
   are mirrored (works around the core not watching provider objects).
 - Development tooling: in-memory Proxmox fake and `cmd/fakepve` HTTP
   server, envtest suite, `make mac-pve-iso` / `make mac-pve-run` for a real
-  PVE (arm64 or emulated amd64) on an Apple Silicon Mac,
-  `hack/pve-dev-setup.sh` for a throwaway PVE, and `hack/pvels` for
-  inspecting one.
+  PVE (arm64, emulated amd64, or x86 nested on another Proxmox),
+  `hack/pve-dev-setup.sh` for a throwaway PVE, `hack/pvels` (with `--get`
+  for raw API reads) for inspecting one, and `hack/fakepve` to run the fake
+  Proxmox inside kind for an in-cluster test of the manager.
