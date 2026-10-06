@@ -32,6 +32,11 @@ SNIPPET=/var/lib/vz/snippets/kubevm-vendor.yaml
 
 log() { printf '\n==> %s\n' "$*" >&2; }
 
+# stdout carries only the credentials Secret, so it can be redirected
+# straight into a file; everything else (qm, apt, pvesm output) goes to
+# stderr.
+exec 3>&1 1>&2
+
 [[ ${EUID} -eq 0 ]] || { echo "run as root" >&2; exit 1; }
 command -v qm >/dev/null || { echo "not a Proxmox VE host" >&2; exit 1; }
 if qm list | awk -v t="${TEMPLATE_ID}" 'NR>1 && $1!=t' | grep -q .; then
@@ -54,12 +59,16 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dnsmasq >/dev/null
 systemctl disable --now dnsmasq >/dev/null 2>&1 || true # PVE SDN may also use it; we run our own unit
 
 log "network: NAT bridge ${BRIDGE} (${NET}.0/24) with DHCP"
+# Guests inherit the uplink's MTU: behind e.g. a Hetzner vSwitch (1400), a
+# 1500-byte guest stalls on larger downloads.
+uplink_mtu=$(cat "/sys/class/net/${UPLINK}/mtu")
 if ! grep -q "iface ${BRIDGE} " /etc/network/interfaces; then
   cat >>/etc/network/interfaces <<EOF
 
 auto ${BRIDGE}
 iface ${BRIDGE} inet static
 	address ${NET}.1/24
+	mtu ${uplink_mtu}
 	bridge-ports none
 	bridge-stp off
 	bridge-fd 0
@@ -75,7 +84,10 @@ bind-interfaces
 except-interface=lo
 dhcp-range=${NET}.100,${NET}.200,12h
 dhcp-option=option:router,${NET}.1
-dhcp-option=option:dns-server,1.1.1.1,9.9.9.9
+dhcp-option=option:mtu,${uplink_mtu}
+# This dnsmasq also answers DNS on the bridge, forwarding to the host's own
+# resolvers, so guests resolve wherever the host can (no public DNS needed).
+dhcp-option=option:dns-server,${NET}.1
 EOF
 cat >/etc/systemd/system/dnsmasq-kubevm.service <<EOF
 [Unit]
@@ -160,7 +172,7 @@ if [[ -z ${API_URL} ]]; then
   API_URL="https://$(ip -4 -o addr show "${UPLINK}" | awk '{print $4}' | cut -d/ -f1 | head -1):8006"
 fi
 log "done (guest-agent privilege: ${agent_priv}, PVE $(pveversion | cut -d/ -f2))"
-cat <<EOF
+cat >&3 <<EOF
 # Save as kubevm-provider-proxmox/.local/credentials.yaml (git-ignored).
 apiVersion: v1
 kind: Secret

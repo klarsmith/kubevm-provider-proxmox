@@ -351,8 +351,32 @@ SeaBIOS, and a BIOS template with an `ide2` cloud-init drive.
   yet use `statusWriter`, and a `not found` when a stale-cache reconcile
   released an already-deleted object. Both are fixed: delete uses
   `statusWriter`, and finalizer release ignores NotFound.
-- Still open: a full x86 guest boot on real KVM (the nested VM on the
-  production Proxmox).
+
+### x86 (amd64) on real KVM: nested PVE 9.2.2 (2026-10-06)
+
+A PVE VM (`make mac-pve-iso PVE_ARCH=nested`, unattended, static IP) on a
+production Proxmox host with nested virtualization (AMD), on an internal
+Hetzner vSwitch network. Guests ran under real KVM (`systemd-detect-virt`
+→ `kvm`).
+
+Passed through the portable `VirtualMachine` alone: create, guest-agent IP
+(`10.99.0.155`), SSH login with the injected key (hostname `smoke-01`, user
+`debian`, `x86_64`, cloud-init `done`), power off (TrySoft), power on, and
+delete, leaving only the template. This closes the amd64 gap: the BIOS /
+`ide2` template path works end to end.
+
+Environment lessons, now handled by the scripts:
+
+- **A vSwitch uplink has MTU 1400.** The installer configured 1500, which
+  the virtio NIC rejects, so `ifreload` failed. `hack/pve-dev-setup.sh` now
+  gives the NAT bridge and DHCP the uplink's MTU, and points guests at the
+  PVE host's own dnsmasq for DNS instead of a public resolver.
+- **The network's gateway is a router VM (pfSense), not the PVE host.** The
+  host does not forward (`ip_forward 0`). The static answer file takes the
+  gateway as input (`STATIC_GW`).
+- **The setup's stdout carried `qm` progress lines** as well as the
+  Secret, so redirecting it to a file produced invalid YAML. stdout now
+  carries only the Secret.
 
 ## The node can change
 

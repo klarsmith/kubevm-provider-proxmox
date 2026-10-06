@@ -104,7 +104,28 @@ go run ./hack/pvels .local/credentials.yaml
 
 Run `hack/pve-dev-setup.sh` as root on a PVE with no VMs (a nested PVE VM
 is ideal). The script refuses to run on a node that already has VMs: it
-rewrites apt sources and `/etc/network/interfaces`.
+rewrites apt sources and `/etc/network/interfaces`. Its stdout is only the
+credentials Secret:
+
+```sh
+ssh root@<pve> 'API_URL=https://<pve>:8006 bash -s' < hack/pve-dev-setup.sh > .local/credentials.yaml
+```
+
+For x86 with real KVM, run PVE nested in a VM on another Proxmox whose
+host has nested virtualization on (`/sys/module/kvm_*/parameters/nested`
+is `1`). An unattended ISO with a static address:
+
+```sh
+make mac-pve-iso PVE_ARCH=nested STATIC_CIDR=10.25.0.104/24 STATIC_GW=10.25.0.1 STATIC_DNS=10.25.0.1
+# copy .local/pve-nested/pve-auto.iso to the host's ISO storage, then e.g.:
+qm create 104 --name kubevm-pve-nested --memory 8192 --cores 4 --cpu host --ostype l26 \
+  --machine q35 --virtio0 local-zfs:64 --net0 virtio,bridge=vmbr1 \
+  --cdrom local:iso/kubevm-pve-nested.iso --boot "order=virtio0;ide2"
+qm start 104
+```
+
+The first boot runs the setup and leaves the Secret at the end of
+`/root/kubevm-firstboot.log`.
 
 ## Releasing
 

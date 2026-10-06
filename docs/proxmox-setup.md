@@ -1,7 +1,7 @@
 # Proxmox VE setup
 
 What the provider needs on the Proxmox side. Verified end to end on PVE
-9.2.9 arm64; on PVE 9.2.2 amd64, everything up to guest boot (see
+9.2.9 arm64 and PVE 9.2.2 amd64 (see
 [findings.md](findings.md#real-pve-smoke-test-2026-10-05)).
 `hack/pve-dev-setup.sh` does all of this on a throwaway PVE; read it
 alongside this page.

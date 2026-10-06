@@ -27,8 +27,8 @@ Tested end to end against real Proxmox VE 9.2.9 (arm64):
 - power on/off, including `Soft` refusal and `TrySoft` fallback
 - delete
 
-On PVE 9.2.2 (amd64, fully emulated), everything up to guest boot was
-tested. Details, and the bugs real Proxmox found, are in
+The same on PVE 9.2.2 amd64 under real (nested) KVM: create, IP, SSH,
+power, delete. Details, and the bugs real Proxmox found, are in
 [docs/findings.md](docs/findings.md).
 
 Not implemented yet, and reported as `UpToDate=False/UnsupportedByProvider`

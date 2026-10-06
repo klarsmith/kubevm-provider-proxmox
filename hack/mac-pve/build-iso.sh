@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Builds an unattended Proxmox VE ISO for a local test PVE on an Apple
-# Silicon Mac: PVE_ARCH=arm64 (default, near-native under HVF) or
-# PVE_ARCH=amd64 (x86, fully emulated; slow). The ISO installs PVE to the
-# VM's virtio disk, then on first boot runs hack/pve-dev-setup.sh and prints the provider's
-# credentials Secret to the serial console (captured by run.sh).
+# Builds an unattended Proxmox VE ISO for a throwaway test PVE. The ISO
+# installs PVE to the VM's virtio disk, then on first boot runs
+# hack/pve-dev-setup.sh, which prints the provider's credentials Secret to
+# the serial console and /root/kubevm-firstboot.log.
 #
-# Usage: hack/mac-pve/build-iso.sh   (via `make mac-pve-iso [PVE_ARCH=amd64]`)
+#   PVE_ARCH=arm64 (default)  QEMU/HVF on an Apple Silicon Mac
+#   PVE_ARCH=amd64            QEMU/TCG on a Mac (fully emulated; slow)
+#   PVE_ARCH=nested           x86 VM on another Proxmox (real nested KVM);
+#                             needs STATIC_CIDR, STATIC_GW, STATIC_DNS
+#
+# Usage: hack/mac-pve/build-iso.sh   (via `make mac-pve-iso [PVE_ARCH=...]`)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -14,8 +18,25 @@ PVE_ARCH=${PVE_ARCH:-arm64}
 case ${PVE_ARCH} in
   arm64) DIR=${ROOT}/.local/pve-vm ISO=${ISO:-proxmox-ve_9.2-1-arm64.iso} API_PORT=8006 TTY=/dev/ttyAMA0 ;;
   amd64) DIR=${ROOT}/.local/pve-vm-amd64 ISO=${ISO:-proxmox-ve_9.2-1.iso} API_PORT=8007 TTY=/dev/ttyS0 ;;
-  *) echo "PVE_ARCH must be arm64 or amd64" >&2; exit 1 ;;
+  nested) DIR=${ROOT}/.local/pve-nested ISO=${ISO:-proxmox-ve_9.2-1.iso} TTY=/dev/ttyS0 ;;
+  *) echo "PVE_ARCH must be arm64, amd64 or nested" >&2; exit 1 ;;
 esac
+
+API_URL=https://127.0.0.1:${API_PORT:-8006}
+network='[network]
+# QEMU user networking: 10.0.2.15/24 via DHCP, gateway 10.0.2.2.
+source = "from-dhcp"'
+if [[ ${PVE_ARCH} == nested ]]; then
+  : "${STATIC_CIDR:?set STATIC_CIDR, e.g. 10.25.0.104/24}" "${STATIC_GW:?set STATIC_GW}" "${STATIC_DNS:?set STATIC_DNS}"
+  API_URL=https://${STATIC_CIDR%/*}:8006
+  network="[network]
+source = \"from-answer\"
+cidr = \"${STATIC_CIDR}\"
+gateway = \"${STATIC_GW}\"
+dns = \"${STATIC_DNS}\"
+filter.ID_NET_NAME = \"*\""
+fi
+mkdir -p "${DIR}"
 
 [[ -f ${DIR}/${ISO} ]] || { echo "missing ${DIR}/${ISO}; download it first" >&2; exit 1; }
 
@@ -35,9 +56,14 @@ for f in "${HOME}"/.ssh/id_ed25519.pub "${HOME}"/.ssh/id_ecdsa.pub "${HOME}"/.ss
 done
 [[ -n ${ssh_key} ]] || { echo "no SSH public key in ~/.ssh" >&2; exit 1; }
 
-sed -e "s|@ROOT_PASSWORD@|${root_password}|" -e "s|@SSH_KEY@|${ssh_key}|" \
-  -e "s|pve-dev.kubevm.test|pve-dev-${PVE_ARCH}.kubevm.test|" \
-  "${HERE}/answer.toml.in" >"${DIR}/answer.toml"
+# The template's [network] block is replaced wholesale for a static setup.
+NETWORK_BLOCK=${network} awk '
+  /^\[network\]/ { print ENVIRON["NETWORK_BLOCK"]; skip = 1; next }
+  /^\[/ { skip = 0 }
+  !skip
+' "${HERE}/answer.toml.in" |
+  sed -e "s|@ROOT_PASSWORD@|${root_password}|" -e "s|@SSH_KEY@|${ssh_key}|" \
+    -e "s|pve-dev.kubevm.test|pve-dev-${PVE_ARCH}.kubevm.test|" >"${DIR}/answer.toml"
 chmod 600 "${DIR}/answer.toml"
 
 # The first-boot hook is a single script: a header that mirrors all output
@@ -48,8 +74,8 @@ chmod 600 "${DIR}/answer.toml"
 exec > >(tee -a /root/kubevm-firstboot.log ${TTY}) 2>&1
 echo "KUBEVM-FIRSTBOOT-BEGIN"
 trap 'echo "KUBEVM-FIRSTBOOT-END rc=\$?"' EXIT
-# The Mac reaches this PVE through QEMU's forwarded port.
-export API_URL=https://127.0.0.1:${API_PORT}
+# How the provider (on the Mac) reaches this PVE.
+export API_URL=${API_URL}
 EOF
   sed '1d' "${ROOT}/hack/pve-dev-setup.sh"
 } >"${DIR}/firstboot.sh"
