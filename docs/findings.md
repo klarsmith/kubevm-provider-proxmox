@@ -417,10 +417,10 @@ SeaBIOS, and a BIOS template with an `ide2` cloud-init drive.
 
 ### x86 (amd64) on real KVM: nested PVE 9.2.2 (2026-10-06)
 
-A PVE VM (`make mac-pve-iso PVE_ARCH=nested`, unattended, static IP) on a
-production Proxmox host with nested virtualization (AMD), on an internal
-Hetzner vSwitch network. Guests ran under real KVM (`systemd-detect-virt`
-→ `kvm`).
+A PVE VM (`make mac-pve-iso PVE_ARCH=nested`, unattended, static IP) on an
+existing Proxmox host with nested virtualization (AMD), attached to one of
+that host's internal bridges. Guests ran under real KVM
+(`systemd-detect-virt` → `kvm`).
 
 Passed through the portable `VirtualMachine` alone: create, guest-agent IP
 (`10.99.0.155`), SSH login with the injected key (hostname `smoke-01`, user
@@ -430,13 +430,14 @@ delete, leaving only the template. This closes the amd64 gap: the BIOS /
 
 Environment lessons, now handled by the scripts:
 
-- **A vSwitch uplink has MTU 1400.** The installer configured 1500, which
-  the virtio NIC rejects, so `ifreload` failed. `hack/pve-dev-setup.sh` now
+- **The uplink had MTU 1400** (a hosting provider's virtual switch). The
+  installer configured 1500, which the virtio NIC rejects, so `ifreload`
+  failed. `hack/pve-dev-setup.sh` now
   gives the NAT bridge and DHCP the uplink's MTU, and points guests at the
   PVE host's own dnsmasq for DNS instead of a public resolver.
-- **The network's gateway is a router VM (pfSense), not the PVE host.** The
-  host does not forward (`ip_forward 0`). The static answer file takes the
-  gateway as input (`STATIC_GW`).
+- **The network's gateway was a router VM, not the PVE host.** The host
+  does not forward (`ip_forward 0`). The static answer file takes the
+  gateway as input (`STATIC_GW`); do not assume the hypervisor is it.
 - **The setup's stdout carried `qm` progress lines** as well as the
   Secret, so redirecting it to a file produced invalid YAML. stdout now
   carries only the Secret.

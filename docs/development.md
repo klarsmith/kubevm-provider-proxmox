@@ -135,7 +135,7 @@ host has nested virtualization on (`/sys/module/kvm_*/parameters/nested`
 is `1`). An unattended ISO with a static address:
 
 ```sh
-make mac-pve-iso PVE_ARCH=nested STATIC_CIDR=10.25.0.104/24 STATIC_GW=10.25.0.1 STATIC_DNS=10.25.0.1
+make mac-pve-iso PVE_ARCH=nested STATIC_CIDR=192.0.2.50/24 STATIC_GW=192.0.2.1 STATIC_DNS=192.0.2.1
 # upload .local/pve-nested/pve-auto.iso to the host's ISO storage as
 # kubevm-pve-nested.iso, then e.g.:
 qm create 104 --name kubevm-pve-nested --memory 8192 --cores 4 --cpu host --ostype l26 \

@@ -27,7 +27,7 @@ network='[network]
 # QEMU user networking: 10.0.2.15/24 via DHCP, gateway 10.0.2.2.
 source = "from-dhcp"'
 if [[ ${PVE_ARCH} == nested ]]; then
-  : "${STATIC_CIDR:?set STATIC_CIDR, e.g. 10.25.0.104/24}" "${STATIC_GW:?set STATIC_GW}" "${STATIC_DNS:?set STATIC_DNS}"
+  : "${STATIC_CIDR:?set STATIC_CIDR, e.g. 192.0.2.50/24}" "${STATIC_GW:?set STATIC_GW}" "${STATIC_DNS:?set STATIC_DNS}"
   API_URL=https://${STATIC_CIDR%/*}:8006
   network="[network]
 source = \"from-answer\"
