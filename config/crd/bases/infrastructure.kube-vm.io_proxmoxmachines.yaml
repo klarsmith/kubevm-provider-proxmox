@@ -1,0 +1,360 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  labels:
+    kube-vm.io/v1alpha1: v1alpha1
+  name: proxmoxmachines.infrastructure.kube-vm.io
+spec:
+  group: infrastructure.kube-vm.io
+  names:
+    categories:
+    - kubevm
+    kind: ProxmoxMachine
+    listKind: ProxmoxMachineList
+    plural: proxmoxmachines
+    shortNames:
+    - pxm
+    singular: proxmoxmachine
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.vmid
+      name: VMID
+      type: integer
+    - jsonPath: .status.powerState
+      name: State
+      type: string
+    - jsonPath: .spec.template
+      name: Template
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="InfrastructureReady")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ProxmoxMachine is one Proxmox VE QEMU VM backing one KubeVM VirtualMachine.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ProxmoxMachineSpec is the Proxmox-specific half of a machine.
+
+              Two kinds of field live here. "Resolved" fields are copied from the parent
+              VirtualMachine by the controller on every reconcile; edit the
+              VirtualMachine, not these. "Provider-only" fields have no portable
+              equivalent; whoever creates this object sets them once and the controller
+              never writes them.
+            properties:
+              bootDiskSizeGiB:
+                description: |-
+                  Resolved. From spec.bootDisk.sizeGiB. The boot disk is only grown,
+                  never shrunk.
+                format: int64
+                type: integer
+              bridge:
+                default: vmbr0
+                description: Provider-only. Bridge for every interface in spec.interfaces.
+                type: string
+              ciUser:
+                description: Provider-only. cloud-init user (ciuser). Empty keeps
+                  the template's.
+                type: string
+              cpus:
+                description: |-
+                  Resolved. From spec.instanceType.resources.cpus. Zero keeps the
+                  template's value.
+                format: int32
+                type: integer
+              credentialsSecretRef:
+                description: |-
+                  Provider-only. A Secret in this namespace with keys url, tokenID,
+                  tokenSecret and optionally caBundle and insecureSkipVerify ("true").
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              deleteOnTermination:
+                description: Resolved. From spec.bootDisk.deleteOnTermination. Nil
+                  means true.
+                type: boolean
+              fullClone:
+                default: true
+                description: Provider-only. Full clone (true) or linked clone (false).
+                type: boolean
+              gateway:
+                description: Provider-only. IPv4 gateway for static addresses.
+                type: string
+              hostName:
+                description: |-
+                  Resolved. From spec.network.hostName. Becomes the Proxmox VM name,
+                  which Proxmox cloud-init uses as the guest hostname.
+                type: string
+              interfaces:
+                description: Resolved. From spec.network.interfaces.
+                items:
+                  description: |-
+                    ProxmoxInterface is one guest network interface, resolved from the
+                    portable spec.network.interfaces.
+                  properties:
+                    addresses:
+                      description: |-
+                        Addresses are bare IPs, as on the portable object. Combined with
+                        spec.staticIPPrefixLength and spec.gateway to build ipconfigN.
+                      items:
+                        type: string
+                      type: array
+                    dhcp4:
+                      description: |-
+                        DHCP4 requests DHCP for IPv4. Also the behaviour when no address is
+                        given.
+                      type: boolean
+                    name:
+                      description: |-
+                        Name is the portable interface name. Proxmox has no per-NIC name, so
+                        it is only used to report addresses back; the NIC is netN by position.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              memoryMiB:
+                description: |-
+                  Resolved. From spec.instanceType.resources.memory, rounded up to MiB.
+                  Zero keeps the template's value.
+                format: int64
+                type: integer
+              nameservers:
+                description: Resolved. From spec.network.nameservers.
+                items:
+                  type: string
+                type: array
+              node:
+                description: |-
+                  Provider-only. Node to place the clone on. Empty means the template's
+                  node. Only used at creation; the VM's current node is always looked up
+                  fresh, because HA and migration move VMs.
+                type: string
+              pool:
+                default: kubevm-dev
+                description: |-
+                  Provider-only. Proxmox pool the VM is created in. Must equal the pool
+                  the manager is allowed to act in.
+                type: string
+              powerOffMode:
+                description: Resolved. How a power-off is performed.
+                enum:
+                - Hard
+                - Soft
+                - TrySoft
+                type: string
+              powerState:
+                description: Resolved. The power state asked for on the parent.
+                enum:
+                - PoweredOn
+                - PoweredOff
+                - Suspended
+                type: string
+              searchDomains:
+                description: Resolved. From spec.network.searchDomains.
+                items:
+                  type: string
+                type: array
+              sshPublicKeys:
+                description: Resolved. From spec.sshPublicKeys.
+                items:
+                  type: string
+                type: array
+              staticIPPrefixLength:
+                description: |-
+                  Provider-only. Prefix length for static addresses. KubeVM addresses
+                  are bare IPs and Proxmox's ipconfigN needs a CIDR.
+                format: int32
+                maximum: 32
+                minimum: 1
+                type: integer
+              storage:
+                description: |-
+                  Provider-only. Storage for the cloned disks (full clones only). Empty
+                  means the template's storage.
+                type: string
+              template:
+                description: |-
+                  Resolved. The name of the Proxmox template VM to clone, read verbatim
+                  from spec.bootDisk.source.image.name. Fixed once a VM exists.
+                type: string
+            required:
+            - credentialsSecretRef
+            type: object
+          status:
+            description: |-
+              ProxmoxMachineStatus carries the KubeVM contract paths (addresses,
+              powerState, providerID, providerMetadata, conditions) plus this
+              provider's own bookkeeping.
+            properties:
+              addresses:
+                items:
+                  description: ProxmoxMachineAddress is one observed guest address.
+                  properties:
+                    address:
+                      minLength: 1
+                      type: string
+                    interface:
+                      type: string
+                    type:
+                      enum:
+                      - InternalIP
+                      type: string
+                  required:
+                  - address
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              consecutiveFailures:
+                description: |-
+                  ConsecutiveFailures counts Proxmox tasks that failed in a row. Reset
+                  by the next task that succeeds.
+                format: int32
+                type: integer
+              lastFailure:
+                description: |-
+                  LastFailure is the most recent failed task's operation and exit
+                  status.
+                type: string
+              nextAttempt:
+                description: |-
+                  NextAttempt is when the controller may start another Proxmox task
+                  after a failure. It grows exponentially with ConsecutiveFailures, so a
+                  VM that cannot start is not hammered with start calls.
+                format: date-time
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              pendingOp:
+                description: PendingOp says what PendingTask is doing.
+                type: string
+              pendingTask:
+                description: PendingTask is the UPID of the Proxmox task in flight,
+                  if any.
+                type: string
+              powerState:
+                description: Observed power state. Absent while a power operation
+                  is in flight.
+                enum:
+                - PoweredOn
+                - PoweredOff
+                type: string
+              providerID:
+                description: 'proxmox://<cluster>/<vmid>. No node: VMs move between
+                  nodes.'
+                type: string
+              providerMetadata:
+                additionalProperties:
+                  type: string
+                type: object
+              provisioned:
+                description: |-
+                  Provisioned is set once the pre-boot configuration (sizing,
+                  cloud-init, network, disk resize) has been applied.
+                type: boolean
+              vmid:
+                description: VMID of the Proxmox VM, recorded as soon as the clone
+                  call returns.
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

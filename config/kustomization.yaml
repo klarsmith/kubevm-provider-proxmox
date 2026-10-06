@@ -1,0 +1,11 @@
+# Installs both CRDs, RBAC and the manager. Flux: point a Kustomization at
+# this directory. Override the image with `images:` and the pool with a patch
+# on the Deployment args.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - crd/kubevm/kube-vm.io_virtualmachines.yaml
+  - crd/bases/infrastructure.kube-vm.io_proxmoxmachines.yaml
+  - manager/manager.yaml
+  - rbac/role.yaml
+  - rbac/bindings.yaml

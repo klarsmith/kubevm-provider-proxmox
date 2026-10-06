@@ -1,0 +1,59 @@
+# A machine, as the two objects a user writes, plus the credentials Secret.
+#
+# Everything portable lives on the VirtualMachine. The ProxmoxMachine holds
+# only provider-only settings (where, which credentials); the controller fills
+# in the rest of its spec from the VirtualMachine on every reconcile.
+#
+# The annotation on the ProxmoxMachine is required: it is this object's
+# consent to be claimed by the VirtualMachine it names.
+apiVersion: kube-vm.io/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: web-01
+  namespace: team-a
+spec:
+  powerState: PoweredOn
+  powerOffMode: TrySoft
+  instanceType:
+    resources:
+      cpus: 2
+      memory: 2Gi
+  bootDisk:
+    source:
+      image:
+        # apiGroup/kind are required by the schema and resolve to nothing.
+        # name is read verbatim as the Proxmox TEMPLATE VM name, so the
+        # template must be named DNS-subdomain style (lowercase, no "_").
+        apiGroup: infrastructure.kube-vm.io
+        kind: ProxmoxTemplate
+        name: debian-12
+    sizeGiB: 20
+  network:
+    hostName: web-01
+    interfaces:
+      - name: primary
+        dhcp4: true
+  sshPublicKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyReplaceMe user@example
+  infrastructureRef:
+    apiGroup: infrastructure.kube-vm.io
+    kind: ProxmoxMachine
+    name: web-01
+---
+apiVersion: infrastructure.kube-vm.io/v1alpha1
+kind: ProxmoxMachine
+metadata:
+  name: web-01
+  namespace: team-a
+  annotations:
+    kube-vm.io/virtual-machine: web-01
+spec:
+  # Provider-only fields. Nothing on VirtualMachine says which cluster, pool
+  # or bridge; set them here once.
+  credentialsSecretRef:
+    name: pve-credentials
+  pool: kubevm-dev        # must match the manager's --allowed-pool
+  bridge: vmbr0
+  # node: pve2            # clone target; default is the template's node
+  # storage: local-lvm    # full-clone target storage; default is the template's
+  # ciUser: debian

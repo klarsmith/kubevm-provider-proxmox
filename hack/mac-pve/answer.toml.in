@@ -1,0 +1,22 @@
+# Proxmox VE automated-installation answer file for the local test PVE.
+# Rendered by build-iso.sh: @ROOT_PASSWORD@ and @SSH_KEY@ are filled in.
+[global]
+keyboard = "en-us"
+country = "ee"
+fqdn = "pve-dev.kubevm.test"
+mailto = "root@localhost"
+timezone = "Europe/Tallinn"
+root-password = "@ROOT_PASSWORD@"
+root-ssh-keys = ["@SSH_KEY@"]
+
+[network]
+# QEMU user networking: 10.0.2.15/24 via DHCP, gateway 10.0.2.2.
+source = "from-dhcp"
+
+[disk-setup]
+filesystem = "ext4"
+disk-list = ["vda"]
+
+[first-boot]
+source = "from-iso"
+ordering = "fully-up"

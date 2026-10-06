@@ -1,0 +1,36 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Not go.mod's version: go.mod states the oldest Go the module
+          # builds with (1.23), but the pinned tools (controller-gen v0.21,
+          # golangci-lint v2.14) need a current toolchain.
+          go-version: stable
+      - run: go vet ./...
+      - run: make verify
+      - run: make lint
+      - run: make test
+
+  # The module must keep building with the Go version go.mod promises.
+  build-min-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+        env:
+          GOTOOLCHAIN: local

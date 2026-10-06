@@ -1,0 +1,47 @@
+# Real-PVE smoke test against a throwaway PVE prepared by
+# hack/pve-dev-setup.sh (template debian-12, pool kubevm-dev, NAT bridge
+# vmbr1 with DHCP). Apply .local/credentials.yaml first.
+apiVersion: kube-vm.io/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: smoke-01
+  namespace: team-a
+spec:
+  powerState: PoweredOn
+  powerOffMode: TrySoft
+  instanceType:
+    resources:
+      cpus: 2
+      memory: 1Gi
+  bootDisk:
+    source:
+      image:
+        apiGroup: infrastructure.kube-vm.io
+        kind: ProxmoxTemplate
+        name: debian-12
+    sizeGiB: 8
+  network:
+    hostName: smoke-01
+    interfaces:
+      - name: primary
+        dhcp4: true
+  sshPublicKeys:
+    - REPLACE_WITH_YOUR_PUBLIC_KEY
+  infrastructureRef:
+    apiGroup: infrastructure.kube-vm.io
+    kind: ProxmoxMachine
+    name: smoke-01
+---
+apiVersion: infrastructure.kube-vm.io/v1alpha1
+kind: ProxmoxMachine
+metadata:
+  name: smoke-01
+  namespace: team-a
+  annotations:
+    kube-vm.io/virtual-machine: smoke-01
+spec:
+  credentialsSecretRef:
+    name: pve-credentials
+  pool: kubevm-dev
+  bridge: vmbr1
+  ciUser: debian
