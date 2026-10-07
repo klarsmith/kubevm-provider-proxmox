@@ -61,7 +61,9 @@ watch has no predicates, so the annotation change makes it re-read
 (`controllers/proxmoxmachine/nudge.go`). This needs `patch` on
 `virtualmachines`, which the manager already has because it hosts the core.
 
-**Proper fix (upstream, written and tested, not yet proposed):** the core
+**Proper fix (upstream, proposed as
+[vm-operator#2008](https://github.com/vmware-tanzu/vm-operator/pull/2008)):**
+the core
 watches adopted provider objects. On first adoption of a GVK it adds a
 metadata-only watch on that kind and maps events back through the controller
 owner reference it already sets. The patch is about 60 lines, plus a new

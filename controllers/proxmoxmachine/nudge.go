@@ -25,7 +25,9 @@ import (
 // would never reach VirtualMachine.status. The core's VirtualMachine watch
 // has no predicates, so an annotation change on the parent is enough to make
 // it re-read. See docs/findings.md, "The core does not see status changes
-// after readiness".
+// after readiness". The proper fix is proposed upstream as
+// https://github.com/vmware-tanzu/vm-operator/pull/2008; once that lands
+// and the KubeVM pin is bumped, this file can go.
 const StatusHashAnnotation = "infrastructure.kube-vm.io/provider-status-hash"
 
 // contractHash hashes exactly the status paths the core reads.
