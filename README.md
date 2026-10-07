@@ -17,7 +17,7 @@ That output is from a real run against Proxmox VE 9.2.9.
 
 ## Status
 
-`v1alpha1`, not released yet. KubeVM itself is pre-release and lives on the
+`v1alpha1`, first release `v0.1.0`. KubeVM itself is pre-release and lives on the
 `feature/kube-vm` branch of `vmware-tanzu/vm-operator`.
 
 Tested end to end against real Proxmox VE 9.2.9 (arm64):

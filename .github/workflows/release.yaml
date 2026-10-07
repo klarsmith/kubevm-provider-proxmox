@@ -21,7 +21,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           awk -v v="${version}" '
             $0 ~ "^## \\[" v "\\]" { found = 1; next }
-            found && /^## \[/ { exit }
+            found && (/^## \[/ || /^\[.*\]: /) { exit }
             found { print }
           ' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then

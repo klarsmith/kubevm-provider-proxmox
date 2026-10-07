@@ -11,11 +11,12 @@ renames that heading to the version and date (see
 
 ## [Unreleased]
 
-### Changed
+## [0.1.0] - 2026-10-07
 
-- Built on controller-runtime v0.25 and k8s.io v0.37 (KubeVM itself pins
-  v0.19 / v0.31; its core controller builds and passes envtest on the newer
-  versions). Go 1.26 or newer is required.
+First release. Built on controller-runtime v0.25 and k8s.io v0.37 (KubeVM
+itself pins v0.19 / v0.31; its core controller builds and passes envtest on
+the newer versions); Go 1.26 or newer is required to build. Depends on
+KubeVM at `vmware-tanzu/vm-operator@c2daa3ae` (`feature/kube-vm`).
 
 ### Added
 
@@ -65,3 +66,6 @@ renames that heading to the version and date (see
   `hack/pve-dev-setup.sh` for a throwaway PVE, `hack/pvels` (with `--get`
   for raw API reads) for inspecting one, and `hack/fakepve` to run the fake
   Proxmox inside kind for an in-cluster test of the manager.
+
+[Unreleased]: https://github.com/klarsmith/kubevm-provider-proxmox/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/klarsmith/kubevm-provider-proxmox/releases/tag/v0.1.0
